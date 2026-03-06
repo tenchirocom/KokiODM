@@ -1,0 +1,13 @@
+{
+    "name": "Kokuchino Theme",
+    "webodmMinVersion": "0.7.1",
+    "description": "Kokuchino portal theme for WebODM",
+    "version": "1.0.0",
+    "author": "Tenchiro",
+    "email": "devinfo@tenchiro.com",
+    "repository": "",
+    "tags": ["kokuchino"],
+    "homepage": "https://www.tenchiro.com/",
+    "experimental": false,
+    "deprecated": false
+}
