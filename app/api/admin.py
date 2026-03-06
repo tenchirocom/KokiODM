@@ -20,8 +20,14 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = User.objects.all()
         email = self.request.query_params.get('email', None)
+        username = self.request.query_params.get('username', None)
+        queryfields = {}
         if email is not None:
-            queryset = queryset.filter(email=email)
+            queryfields["email"] = email
+        if username is not None:
+            queryfields["username"] = username
+        if queryfields:
+            queryset = queryset.filter(**queryfields)
         return queryset
 
     def create(self, request):
