@@ -1,0 +1,13 @@
+{
+	"name": "SSO Extension",
+	"webodmMinVersion": "0.7.1",
+	"description": "Single sign-on extensions using JWT tokens.",
+	"version": "1.0.0",
+	"author": "Tenchiro",
+	"email": "devinfo@tenchiro.com",
+	"repository": "",
+	"tags": ["kokuchino"],
+	"homepage": "https://www.tenchiro.com/",
+	"experimental": false,
+	"deprecated": false
+}
