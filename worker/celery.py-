@@ -97,3 +97,27 @@ MockAsyncResult.set = lambda cti, r: MockAsyncResult(cti, r)
 if __name__ == '__main__':
     app.start()
 
+#----------------------- CONDITIONAL PLUGIN LAUNCHER -----------------------
+# This code is to support environments where plugins need to be available in
+# worker processes. For example, if a plugin needs to respond to signals that
+# are generated only in worker processes.
+# 
+# How to enable:
+#   Set the following in the Django settings: CELERY_LOAD_PLUGINS = True
+#---------------------------------------------------------------------------
+load_plugins = app.conf.get('load_plugins', False)
+print(f"[Kokuchino] checking load plugins switch, load_plugins={load_plugins}...")
+if app.conf.get('load_plugins', False):
+    from celery.signals import worker_init
+
+    print(f"[Kokuchino] connecting worker_load_plugins...")
+
+    @worker_init.connect
+    def worker_load_plugins(sender, **kwargs):
+        try:
+            from app.plugins import init_plugins
+            init_plugins()
+            print("[Kokuchino] Async worker plugin registry successfully attached.")
+        except Exception as e:
+            import logging
+            logging.getLogger('celery.worker').error(f"[Kokuchino] Worker plugin initialization failed: {e}")

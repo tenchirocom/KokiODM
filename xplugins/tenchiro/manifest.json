@@ -1,7 +1,7 @@
 {
-    "name": "Kokuchino Theme",
+    "name": "Kokuchino Extensions",
     "webodmMinVersion": "0.7.1",
-    "description": "Kokuchino portal theme for WebODM",
+    "description": "Kokuchino SaaS Extensions for WebODM",
     "version": "1.0.0",
     "author": "Tenchiro",
     "email": "devinfo@tenchiro.com",

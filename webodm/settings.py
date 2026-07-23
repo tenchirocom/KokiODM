@@ -105,6 +105,7 @@ INSTALLED_APPS = [
     'codemirror2',
     'app',
     'nodeodm',
+    'tenchiro.apps.TenchiroConfig',
 ]
 
 MIDDLEWARE = [
@@ -333,6 +334,8 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_INCLUDE=['worker.tasks', 'app.plugins.worker']
 CELERY_WORKER_REDIRECT_STDOUTS = False
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+
+CELERY_LOAD_PLUGINS = True
 
 CACHES = {
     "default": {

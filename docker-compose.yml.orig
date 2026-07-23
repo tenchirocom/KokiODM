@@ -1,8 +1,5 @@
 # This configuration does not include a processing node
 # Which makes for faster setup times
-#
-# Webapp and Celery Volumes
-#
 version: '2.1'
 volumes:
   dbdata:
@@ -22,9 +19,6 @@ services:
     container_name: webapp
     entrypoint: /bin/bash -c "service cron start && chmod +x /webodm/*.sh && /bin/bash -c \"/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/start.sh\""
     volumes:
-      - ./webodm/settings.py:/webodm/webodm/settings.py:Z
-      - ./webodm/urls.py:/webodm/webodm/urls.py:Z
-      - ./tenchiro:/webodm/tenchiro:Z
       - ./worker/celery.py:/webodm/worker/celery.py:Z
       - ${WO_MEDIA_DIR}:/webodm/app/media:z
       - ../kokuchino/plugins/kokuchino-webodm-plugin/xplugins/tenchiro:/webodm/coreplugins/tenchiro:Z
@@ -59,9 +53,6 @@ services:
     container_name: worker
     entrypoint: /bin/bash -c "/webodm/wait-for-postgres.sh db /webodm/wait-for-it.sh -t 0 broker:6379 -- /webodm/wait-for-it.sh -t 0 webapp:8000 -- /webodm/worker.sh start"
     volumes:
-      - ./webodm/settings.py:/webodm/webodm/settings.py:Z
-      - ./webodm/urls.py:/webodm/webodm/urls.py:Z
-      - ./tenchiro:/webodm/tenchiro:Z
       - ./worker/celery.py:/webodm/worker/celery.py:Z
       - ${WO_MEDIA_DIR}:/webodm/app/media:z
       - ../kokuchino/plugins/kokuchino-webodm-plugin/xplugins/tenchiro:/webodm/coreplugins/tenchiro:Z

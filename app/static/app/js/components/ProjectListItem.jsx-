@@ -264,32 +264,12 @@ class ProjectListItem extends React.Component {
                             totalCount: this.state.upload.totalCount - 1,
                             totalBytes: this.state.upload.totalBytes - file.size
                         });
-                        errorMessage = interpolate(
-                            _('Cannot upload %(filename)s, file is too large! Default MaxFileSize is %(maxFileSize)s MB!'),
-                            { filename: file.name, maxFileSize: this.dz.options.maxFilesize }
-                        );
-                        throw new Error(errorMessage);
+                        throw new Error(interpolate(_('Cannot upload %(filename)s, file is too large! Default MaxFileSize is %(maxFileSize)s MB!'), { filename: file.name, maxFileSize: this.dz.options.maxFilesize }));
                     }
                     retry();
                 }else{
                     // Check response
                     let response = JSON.parse(file.xhr.response);
-
-                    // Handle server aborted upload
-                    const abortUpload = response?.abort_upload ? true : false;
-                    console.log("xxy completed.");
-                    if (abortUpload) {
-                        // Delete from upload queue
-                        this.setUploadState({
-                            totalCount: this.state.upload.totalCount - 1,
-                            totalBytes: this.state.upload.totalBytes - file.size
-                        });
-                        errorMessage = response?.error
-                            ? response?.error
-                            : _('Server aborted file upload.');
-                        throw new Error(errorMessage);
-                    }
-
                     if (response.success){
                       if (response.uploaded && response.uploaded[file.upload.filename] === file.size){
                         // Update progress by removing the tracked progress and 

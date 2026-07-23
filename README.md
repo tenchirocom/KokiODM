@@ -11,6 +11,10 @@ A user-friendly, commercial grade software for drone image processing. Generate 
  * [Installation](https://docs.webodm.org/installation/)
  * [Hardware Requirements](https://docs.webodm.org/hardware-requirements/)
  * [Support the Project](https://docs.webodm.org/support-the-project/)
+
+# Starting the ODM node
+
+ * docker run -d -p 3000:3000 --name node-odm-1 opendronemap/nodeodm
  
 # License
 
