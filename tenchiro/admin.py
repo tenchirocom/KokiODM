@@ -11,6 +11,7 @@ class SettingAdmin(admin.ModelAdmin):
     """
     list_display = (
         '__str__',
+        'webhook_applabel',
         'webhook_appname',
         'webhook_enabled',
         'webhook_target_url',
@@ -18,6 +19,12 @@ class SettingAdmin(admin.ModelAdmin):
     )
     
     fieldsets = (
+        ('General Options', {
+            'fields': (
+                'webhook_applabel',
+            ),
+            'description': 'Configure general app parameters.'
+        }),
         ('Webhook Dispatcher', {
             'fields': (
                 'webhook_appname',

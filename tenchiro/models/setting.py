@@ -23,6 +23,11 @@ class Setting(models.Model):
                     "The name must be defined in the application configuration in the portal service."
                     )
     )
+    webhook_applabel = models.CharField(
+        max_length=64,
+        default=_("Tenchiro ODM"),
+        help_text=_("The user readable label used to describe this app.")
+    )
     webhook_enabled = models.BooleanField(
         default=True,
         help_text=_("Toggle outbound webhook dispatching for usage events. "

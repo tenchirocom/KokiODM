@@ -1,11 +1,12 @@
 # tenchiro/models/webhook.py
 import uuid
 from datetime import datetime, timezone
-from django.conf import settings                        # type: ignore
-from django.contrib.postgres.fields import JSONField    # type: ignore
-from django.core.cache import cache                     # type: ignore
-from django.db import models                            # type: ignore
-from django.utils.translation import gettext_lazy as _  # type: ignore
+from django.conf import settings                            # type: ignore
+from django.contrib.postgres.fields import JSONField        # type: ignore
+from django.core.cache import cache                         # type: ignore
+from django.core.serializers.json import DjangoJSONEncoder  # type: ignore
+from django.db import models                                # type: ignore
+from django.utils.translation import gettext_lazy as _      # type: ignore
 from .defaults import WEBHOOK_SENT, WEBHOOK_RECEIVED, WEBHOOK_DIRECTION_CHOICES
 
 class WebhookLog(models.Model):
@@ -55,6 +56,7 @@ class WebhookLog(models.Model):
         default=dict,
         blank=True,
         null=True,
+        encoder=DjangoJSONEncoder,
         help_text=_("Stores small payloads, cached JSON responses for retries, or diagnostic error messages.")
     )
     created_at = models.DateTimeField(

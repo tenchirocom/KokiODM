@@ -1,26 +1,32 @@
-import os, shutil, uuid
+import os, shutil, uuid, json
 from typing import Union, Iterable
 from zoneinfo import ZoneInfo
 # Django imports
-from django.conf import settings                        # type: ignore
-from django.contrib.auth.models import User             # type: ignore
-from django.core.cache import cache                     # type: ignore
-from django.db import connections                       # type: ignore
-from django.db.models import Sum                        # type: ignore
-from django.http import JsonResponse                    # type: ignore
-from django.views import View                           # type: ignore
-from django.utils.decorators import method_decorator    # type: ignore
-from django.views.decorators.csrf import csrf_exempt    # type: ignore
-from django.utils import timezone                       # type: ignore
-from django.utils.translation import gettext as _       # type: ignore
+from django.conf import settings                            # type: ignore
+from django.contrib.auth.models import User                 # type: ignore
+from django.core.cache import cache                         # type: ignore
+from django.core.serializers.json import DjangoJSONEncoder  # type: ignore
+from django.db import connections                           # type: ignore
+from django.db.models import Sum                            # type: ignore
+from django.http import JsonResponse                        # type: ignore
+from django.views import View                               # type: ignore
+from django.utils.decorators import method_decorator        # type: ignore
+from django.views.decorators.csrf import csrf_exempt        # type: ignore
+from django.utils import timezone                           # type: ignore
+from django.utils.translation import gettext as _           # type: ignore
 # Webodm imports
 from app.models import Project, Task
 from nodeodm.models import ProcessingNode
 # Local imports
-from .apps import logger
+from .apps import logger, applabel
 from .secrets import Secrets
-from .models import Setting
+from .models import Setting, WebhookLog
 from .services.pools import Pools
+from .services.usage import Usage
+
+class ServiceInfo:
+    REQUEST_ID_HEADER = 'X-Request-ID'
+    REQUEST_ID_QUERY = 'request_id'
 
 @method_decorator(csrf_exempt, name='dispatch')
 class UsageViewXX(View):
@@ -163,7 +169,7 @@ class HealthView(View):
             logger.error(f"[tenchiro][health][db] exception: {str(e)}")
 
         # Cache the value
-        cache.set(db_key, metadata['db'], settings.HEALTH_CACHE_TTL)
+        cache.set(db_key, metadata['db'], getattr(settings, 'HEALTH_CACHE_TTL', 60))
         return metadata['db']
     
     def _check_redis(self, metadata):
@@ -199,7 +205,7 @@ class HealthView(View):
             logger.error(f"[tenchiro][health][redis] exception: {str(e)}")
 
         # Cache the value
-        cache.set(redis_key, metadata['redis'], settings.HEALTH_CACHE_TTL)
+        cache.set(redis_key, metadata['redis'], getattr(settings, 'HEALTH_CACHE_TTL', 60))
         return metadata['redis']
 
     def _check_disk(self, metadata):
@@ -220,7 +226,7 @@ class HealthView(View):
             if not storage_root:
                 disk_meta['disk'] = self.Status.Unhealthy
                 logger.error("[tenchiro][health][disk] MEDIA_ROOT is not configured.")
-                cache.set(disk_key, disk_meta, settings.HEALTH_CACHE_TTL)
+                cache.set(disk_key, disk_meta, getattr(settings, 'HEALTH_CACHE_TTL', 60))
                 metadata.update(disk_meta)
                 return metadata['disk']
 
@@ -247,7 +253,7 @@ class HealthView(View):
             disk_meta['disk'] = self.Status.Unhealthy
             logger.critical(f"[tenchiro][health][disk] Storage subsystem unrecoverable: {str(e)}")
 
-        cache.set(disk_key, disk_meta, settings.HEALTH_CACHE_TTL)
+        cache.set(disk_key, disk_meta, getattr(settings, 'HEALTH_CACHE_TTL', 60))
         metadata.update(disk_meta)
         return metadata['disk']
     
@@ -277,7 +283,7 @@ class HealthView(View):
             if total_nodes == 0:
                 nodes_meta['nodes'] = self.Status.Degraded
                 logger.warning(f"[tenchiro][health][nodes] 0 compute nodes configured for cluster: {cluster_id if cluster_id else 'all'}.")
-                cache.set(nodes_key, nodes_meta, settings.HEALTH_CACHE_TTL)
+                cache.set(nodes_key, nodes_meta, getattr(settings, 'HEALTH_CACHE_TTL', 60))
                 metadata.update(nodes_meta)
                 return metadata['nodes']
 
@@ -315,7 +321,7 @@ class HealthView(View):
             nodes_meta['nodes'] = self.Status.Unhealthy
             logger.error(f"[tenchiro][health][nodes] Subsystem exception: {str(e)}")
 
-        cache.set(nodes_key, nodes_meta, settings.HEALTH_CACHE_TTL)
+        cache.set(nodes_key, nodes_meta, getattr(settings, 'HEALTH_CACHE_TTL', 60))
         metadata.update(nodes_meta)
         return metadata['nodes']
 
@@ -326,50 +332,71 @@ class UserUsageView(View):
     Authenticated via a shared machine-to-machine secret key.
     """
     def get(self, request, *args, **kwargs):
-        # Authenticate
-        secrets = Secrets()
-        if not secrets.authenticate(request):
-            return JsonResponse({'status': 'error', 'error': "Invalid or missing API Secret Key."}, status=401)
-        
-        username = kwargs.get("username")
-        if username:
-            # The username was parsed from the url and placed in kwargs. Fetch the
-            # user's cluster id, if specified, and use this to narrow down the node
-            # health response.
-            user = User.objects.filter(username=username).first()
-            if user:
-                # An existing user was provided.
-                user_profile = getattr(user, 'profile', None)
-                cluster_id = getattr(user_profile, 'cluster_id', None) if user_profile else None
-                logger.warning(f"[tenchiro][usage] user={user.username}, cluster_id={cluster_id}.")
-            else:
-                logger.warning(f"[tenchiro][usage] non-existent user ({username}) specified in url, default to full check.")
-        else:
-            logger.warning(f"[tenchiro][usage] no user specified.")
 
-        # Extract Data Context (Fetch projects and get usage)
-        user_projects = Project.objects.filter(owner__username=username)
-        usage_totals = get_project_usage(user_projects)
-        
+        user, error_response = _auth_and_get_user(request, kwargs)
+        if error_response:
+            return error_response
+
+        request_uuid = request.headers.get(ServiceInfo.REQUEST_ID_HEADER) or request.GET.get(ServiceInfo.REQUEST_ID_QUERY)
+        if request_uuid:
+            existing_log = WebhookLog.objects.filter(user=user, message_uuid=request_uuid).first()
+            if existing_log:
+                return self._build_response(
+                    existing_log.message_uuid,
+                    existing_log.sequence_key,
+                    existing_log.metadata,
+                )
+
+        usage = Usage(user)
+        disk_events = usage.get_disk_events()
+        cpu_events = usage.get_cpu_events()
+        project_count = Project.objects.filter(owner=user).count()
+        task_count = Task.objects.filter(project__owner=user).count()
+
+        usage_data = usage.log_sent(
+            {
+                'usage': disk_events,
+                'consume': cpu_events
+            },
+            message_uuid=request_uuid,
+            additional_meta={
+                'username': user.username,
+                'total_projects': project_count or 0,
+                'total_tasks': task_count or 0,
+            },
+            response_status=200
+        )
+
+        return self._build_response(
+            usage_data.get('message_uuid'),
+            usage_data.get('sequence_key'),
+            usage_data
+        )
+
+    def _build_response(self, message_uuid, sequence_key, usage_data):
+        """Constructs response using saved delta metrics + fresh live metadata."""
         # Fetch the appname from the config dictionary
         config = Setting.get_solo()
         appname = config.webhook_appname
-        
+
         return JsonResponse({
-            'status': 'success',    # REQUIRED BY PULL API
-            'name': appname,        # REQUIRED BY PULL API
-            'label': _("Tenchiro SX"),
-            'usage': {              # REQUIRED BY PULL API
-                "disk_bytes": usage_totals.get('disk_bytes') or 0,
-                "cpu_seconds": usage_totals.get('cpu_seconds') or 0,
+                'status': 'success',
+                'name': appname,
+                'label': applabel,
+                'message_uuid': message_uuid,
+                'sequence_key': sequence_key,
+                'usage': usage_data.get('usage'),
+                'consume': usage_data.get('consume'),
+                'reserve': usage_data.get('reserve'),
+                'meta': {
+                    'username': usage_data.get('username'),
+                    'total_projects': usage_data.get('total_projects'),
+                    'total_tasks': usage_data.get('total_tasks')
+                }
             },
-            'reserve': None,        # REQUIRED BY PULL API
-            'meta': {
-                'username': username,
-                'total_projects': user_projects.count(),
-                'total_tasks': usage_totals.get('total_tasks') or 0
-            }
-        }, status=200)
+            encoder=DjangoJSONEncoder,
+            status=200
+        )
 
 @method_decorator(csrf_exempt, name='dispatch')
 class UserPoolsView(View):
@@ -379,38 +406,9 @@ class UserPoolsView(View):
     """
     def get(self, request, *args, **kwargs):
 
-        # Authenticate
-        secrets = Secrets()
-        if not secrets.authenticate(request):
-            return JsonResponse({'status': 'fail', 'error': "Invalid or missing API Secret Key."}, status=401)
-        
-        username = kwargs.get("username")
-        if username:
-            # The username was parsed from the url and placed in kwargs. Fetch the
-            # user's cluster id, if specified, and use this to narrow down the node
-            # health response.
-            user = User.objects.filter(username=username).first()
-            if user:
-                # An existing user was provided.
-                user_profile = getattr(user, 'profile', None)
-                cluster_id = getattr(user_profile, 'cluster_id', None) if user_profile else None
-                logger.warning(f"[tenchiro][usage] user={user.username}, cluster_id={cluster_id}.")
-            else:
-                # Returning all pools not supported.
-                logger.warning(f"[tenchiro][usage] non-existent user ({username}) specified in url")
-                return JsonResponse({
-                    'status': 'fail',
-                    'error': f"Non-existent user ({username}) specified in url"},
-                    status=401
-                )
-        else:
-            # Returning all pools not supported.
-            logger.warning(f"[tenchiro][usage] no user specified.")
-            return JsonResponse({
-                'status': 'fail',
-                'error': "No user specified."},
-                status=401
-            )
+        user, error_response = _auth_and_get_user(request, kwargs)
+        if error_response:
+            return error_response
 
         # Fetch the appname from the config dictionary
         config = Setting.get_solo()
@@ -422,41 +420,96 @@ class UserPoolsView(View):
         pools.log_sent(resources_available, response_status=200)
         
         return JsonResponse({
-            'status': 'success',    # REQUIRED BY PULL API
-            'name': appname,        # REQUIRED BY PULL API
-            'label': _("Tenchiro SX"),
-            'pools': resources_available,
-            'meta': {
-                'username': username,
-            }
-        }, status=200)
+                'status': 'success',    # REQUIRED BY PULL API
+                'name': appname,        # REQUIRED BY PULL API
+                'label': _("Tenchiro SX"),
+                'pools': resources_available,
+                'meta': {
+                    'username': user.username,
+                }
+            },
+            encoder=DjangoJSONEncoder,
+            status=200
+        )
 
-def get_project_usage(projects:Union[Project, Iterable[Project]]) -> dict:
+    def post(self, request, *args, **kwargs):
+
+        user, error_response = _auth_and_get_user(request, kwargs)
+        if error_response:
+            return error_response
+
+        # Parse payload
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+            message_uuid = payload.get('message_uuid')
+            sequence_key = payload.get('sequence_key')
+            resources_available = payload.get('pools_data')
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JsonResponse({'status': 'fail', 'error': 'Invalid JSON body.'}, status=400)
+
+        config = Setting.get_solo()
+        appname = config.webhook_appname
+
+        # Execute pool update
+        pools = Pools(user)
+        log_status = pools.log_received(resources_available, message_uuid=message_uuid, sequence_key=sequence_key, response_status=200)
+        if not log_status.get('logged'):
+            return JsonResponse({
+                    'status':  'ignored',
+                    'name':    appname,
+                    'label':   applabel,
+                    'message': _("Duplicate message. No update to pools."),
+                    'meta': {
+                        'username': user.username,
+                    }
+                },
+                status=202
+            )
+        
+        pools.update_pools(resources_available, message_uuid)
+
+        return JsonResponse({
+                'status':  'success',
+                'name':    appname,
+                'label':   applabel,
+                'message': _("Pools have been updated by {label}.").format(label=applabel),
+                'meta': {
+                    'username': user.username,
+                }
+            },
+            encoder=DjangoJSONEncoder,
+            status=200
+        )
+
+# --------- Helper Functions ---------
+
+def _auth_and_get_user(request, kwargs):
+    """Helper to handle secret verification and user resolution."""
+    secrets = Secrets()
+    if not secrets.authenticate(request):
+        return None, JsonResponse({'status': 'fail', 'error': "Invalid or missing API Secret Key."}, status=401)
+
+    username = kwargs.get("username")
+    if not username:
+        logger.warning("[tenchiro][usage] no user specified.")
+        return None, JsonResponse({'status': 'fail', 'error': "No user specified."}, status=401)
+
+    user = User.objects.select_related('profile').filter(username=username).first()
+    if not user:
+        logger.warning(f"[tenchiro][usage] non-existent user ({username}) specified in url")
+        return None, JsonResponse({'status': 'fail', 'error': f"Non-existent user ({username}) specified in url"}, status=401)
+
+    user_profile = getattr(user, 'profile', None)
+    cluster_id = getattr(user_profile, 'cluster_id', None) if user_profile else None
+    logger.warning(f"[tenchiro][usage] user={user.username}, cluster_id={cluster_id}.")
+
+    return user, None
+
+def get_task_count(projects:Union[Project, Iterable[Project]]) -> dict:
+
     # Bound check: singleton project
     if not hasattr(projects, '__iter__'):
         projects = [projects]
         
     user_tasks = Task.objects.filter(project__in=projects)
-
-    logger.warning(f"[tenchiro][usage][get project usage] user_tasks={user_tasks}")
-
-    # Let the Database compute the sum directly
-    raw_totals = user_tasks.aggregate(
-        total_size=Sum('size'),
-        total_time=Sum('processing_time')
-    )
-
-    #
-    # CPU time is not static. It needs to be time-based
-    #
-
-    # 2. Perform your calculations in Python once the data is returned
-    disk_bytes = 69 #DiskUsage.megabytes_to_bytes(raw_totals['total_size'] or 0)
-    cpu_seconds = int((raw_totals['total_time'] or 0) / 1000)
-
-    return {
-        "disk_bytes": disk_bytes,
-        "cpu_seconds": cpu_seconds,
-        "total_tasks": user_tasks.count()
-    }
-
+    return user_tasks.count()

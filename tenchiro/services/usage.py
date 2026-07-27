@@ -1,12 +1,12 @@
-import os
 from decimal import Decimal
 from django.contrib.auth import get_user_model  # type: ignore
 from django.core.cache import cache             # type: ignore
-from django.db.models import Sum                # type: ignore
+from django.db.models import Sum, Q             # type: ignore
 from app.models.task import Task
-from tenchiro.models import UsageEvent, RESOURCE_CLASS_AGGREGATE, RESOURCE_CLASS_CONSUMED
+from tenchiro.models import UsageEvent, WebhookLog, ServiceType, RESOURCE_CLASS_AGGREGATE, RESOURCE_CLASS_CONSUMED
 from tenchiro.services.disk import Disk
 from ..apps import logger
+from ..models import WEBHOOK_SENT
 
 User = get_user_model()
 
@@ -118,24 +118,101 @@ def record_task_removed(task_id: str) -> None:
     except Exception as e:
         logger.exception(f"[tenchiro][usage][record task removed] Exception encountered recording DISK usage: {str(e)}")
 
+class Usage:
 
-# Current disk (latest aggregate, or recompute live)
-def get_user_disk_usage(user) -> Decimal:
-    latest = (
-        UsageEvent.objects
-        .filter(user=user, usage_type='disk_bytes', usage_class=RESOURCE_CLASS_AGGREGATE)
-        .order_by('-created_at')
-        .first()
-    )
-    return latest.usage_value if latest else Decimal(0)
+    def __init__(self, user):
+        self.user = user
 
-# CPU consumed in a period (or lifetime)
-def get_user_cpu_usage(user, since=None) -> Decimal:
-    qs = UsageEvent.objects.filter(
-        user=user,
-        usage_type='cpu_seconds',
-        usage_class=RESOURCE_CLASS_CONSUMED,
-    )
-    if since:
-        qs = qs.filter(created_at__gte=since)
-    return qs.aggregate(total=Sum('usage_value'))['total'] or Decimal(0)
+    def get_disk_events(self) -> list[UsageEvent]:
+        """Returns a list with the latest aggregate disk UsageEvent (or empty list)."""
+        latest = (
+            UsageEvent.objects
+            .filter(user=self.user, usage_type='disk_bytes', usage_class=RESOURCE_CLASS_AGGREGATE)
+            .order_by('-created_at')
+            .first()
+        )
+        return [latest] if latest else []
+
+    def get_cpu_events(self, since=None) -> list[UsageEvent]:
+        """Returns a evaluated list of unacknowledged (or since date) CPU UsageEvents."""
+        qs = UsageEvent.objects.filter(
+            user=self.user,
+            usage_type='cpu_seconds',
+            usage_class=RESOURCE_CLASS_CONSUMED,
+        )
+        if since:
+            qs = qs.filter(created_at__gte=since)
+        else:
+            qs = qs.exclude(
+                webhook_logs__direction=WEBHOOK_SENT,
+                webhook_logs__response_status=200,
+            )
+
+        # Force immediate evaluation to list to snapshot records and avoid duplicate DB hits
+        return list(qs)
+
+    def log_sent(self, all_usage:dict, message_uuid:str=None, sequence_key:str=None, response_status:int=200, additional_meta:dict=None) -> dict:
+        """
+        Logs an outbound webhook transmission attempt and attaches all unsent UsageEvent 
+        records for this user to track delivery state.
+        """
+        # Fallback generation for message tracking identifiers: uuid and sequence key
+        if not message_uuid:
+            message_uuid = WebhookLog.generate_message_uuid()
+
+        if not sequence_key:
+            sequence_key = WebhookLog.generate_sequence_key(self.user)
+
+        # Collect all events from all sections cleanly
+        events_to_link = []
+        for key in ('usage', 'consume', 'reserve'):
+            events_to_link.extend(all_usage.get(key) or [])
+
+        # Calculate exact Decimal sums
+        disk_total = sum((e.usage_value for e in all_usage.get('usage', []) if e.usage_type == 'disk_bytes'), Decimal('0'))
+        cpu_total = sum((e.usage_value for e in all_usage.get('consume', []) if e.usage_type == 'cpu_seconds'), Decimal('0'))
+
+        # Build JSON metadata payload from the list of events
+        json_metadata_payload = {
+            'usage': {
+                'disk_bytes': disk_total
+            },
+            'consume': {
+                'cpu_seconds': cpu_total
+            },
+            'reserve': None,
+        }
+
+        # Create WebhookLog record
+        webhook_log = WebhookLog.objects.create(
+            user=self.user,
+            service=ServiceType.PORTAL_USAGE,
+            message_uuid=message_uuid,
+            sequence_key=sequence_key,
+            direction=WEBHOOK_SENT,
+            response_status=response_status,
+            metadata={
+                **additional_meta,
+                **json_metadata_payload,
+            },
+        )
+
+        # Wire up M2M relationship in bulk
+        if events_to_link:
+            webhook_log.usage_events.add(*events_to_link)
+
+        logger.info(
+            f"[tenchiro][usage] Logged WEBHOOK_SENT | user={self.user.username} | "
+            f"status={response_status} | events_linked={len(events_to_link)} | "
+            f"msg_uuid={message_uuid}"
+        )
+
+        return {
+            **additional_meta,
+            **json_metadata_payload,
+            'webhook_log': webhook_log,
+            'logged': True,
+            'message_uuid': message_uuid,
+            'sequence_key': sequence_key,
+        }
+

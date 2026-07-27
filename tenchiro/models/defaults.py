@@ -21,3 +21,7 @@ WEBHOOK_DIRECTION_CHOICES = (
     (WEBHOOK_SENT,      _('Sent')),
     (WEBHOOK_RECEIVED,  _('Received')),
 )
+
+class ServiceType:
+    PORTAL_USAGE = 'portal:usage'
+    PORTAL_POOLS = 'portal:pools'

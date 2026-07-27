@@ -35,6 +35,10 @@ class UsageEvent(models.Model):
             models.Index(fields=['task_uuid']),
             models.Index(fields=['usage_class', 'created_at']),
             models.Index(fields=['usage_class', 'usage_type']),
+            models.Index(
+                fields=['user', 'usage_type', 'usage_class', 'created_at'],
+                name='idx_usage_usr_typ_cls_creat',
+            ),
         ]
         ordering = ['-created_at']
 

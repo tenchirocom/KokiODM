@@ -1,8 +1,10 @@
 import sys, os
-from django.apps import AppConfig # type: ignore
+from django.apps import AppConfig                       # type: ignore
+from django.utils.translation import gettext_lazy as _  # type: ignore
 import logging
 
 logger = logging.getLogger('app.logger')
+applabel = _("Tenchiro ODM")
 
 class TenchiroConfig(AppConfig):
     name = 'tenchiro'

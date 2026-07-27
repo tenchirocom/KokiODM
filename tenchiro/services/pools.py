@@ -1,6 +1,6 @@
 from django.db import transaction       # type: ignore
 from ..apps import logger
-from ..models import UsagePool, WebhookLog, WEBHOOK_SENT, WEBHOOK_RECEIVED
+from ..models import UsagePool, WebhookLog, ServiceType, WEBHOOK_SENT, WEBHOOK_RECEIVED
 
 class Pools:
     """
@@ -60,7 +60,7 @@ class Pools:
             sequence_key = self.generate_sequence_key()
 
         WebhookLog.objects.create(
-            service="portal:pools",
+            service=ServiceType.PORTAL_POOLS,
             direction=WEBHOOK_SENT,
             message_uuid=message_uuid,
             user=self.user,
@@ -98,7 +98,7 @@ class Pools:
             message_uuid = WebhookLog.generate_message_uuid()
 
         # UUID Duplicate Check
-        if WebhookLog.objects.filter(message_uuid=message_uuid).exists():
+        elif WebhookLog.objects.filter(message_uuid=message_uuid).exists():
             logger.warning(f"Duplicate message_uuid skipped: {message_uuid}")
             return { 'webhook_log': None, 'logged': False }
 
@@ -118,7 +118,7 @@ class Pools:
 
         # Create log if valid
         log_entry = WebhookLog.objects.create(
-            service="portal:pools",
+            service=ServiceType.PORTAL_POOLS,
             direction=WEBHOOK_RECEIVED,
             message_uuid=message_uuid,
             user=self.user,

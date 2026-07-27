@@ -83,7 +83,7 @@ The Portal handles duplicate or out-of-order usage messages using a dual-header 
    - Every outbound message increments and includes this `serial_number`.
    - **Enforcement Rule:** The Portal accepts and applies state updates **only if** `incoming_serial > last_processed_serial` for that app/user stream.
    - If an incoming payload arrives with a `serial_number <= last_processed_serial` (and is not an exact `message_id` retry), it is rejected or logged as stale to prevent out-of-order usage from overwriting newer aggregate snapshots or corrupting consumed totals.
-   
+
 ## Out of scope for the app
 
 - Plan limits, cycle boundaries, multi-app math, overage billing.
